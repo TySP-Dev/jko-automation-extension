@@ -166,7 +166,7 @@ class JKOCourseAutomation:
         """Wait for page to load"""
         try:
             await self.page.wait_for_load_state("networkidle", timeout=timeout * 1000)
-            await asyncio.sleep(1)  # Additional wait for dynamic content
+            await asyncio.sleep(2)  # Additional wait for dynamic content and iframes
         except Exception as e:
             if self.debug:
                 print(f"Page load timeout (continuing anyway): {e}")
@@ -191,6 +191,10 @@ class JKOCourseAutomation:
     async def check_if_in_course(self) -> bool:
         """Check if we're currently inside a course (vs course selection page)"""
         try:
+            if not self.main_page:
+                print("⚠ Warning: main_page is None in check_if_in_course()")
+                return False
+
             # Look for course player indicators on the main page
             indicators = [
                 '#playerCourseTitle',
@@ -200,15 +204,29 @@ class JKOCourseAutomation:
             ]
 
             for indicator in indicators:
-                element = await self.main_page.query_selector(indicator)
-                if element:
-                    return True
+                try:
+                    element = await self.main_page.query_selector(indicator)
+                    if element:
+                        if self.debug:
+                            print(f"Found course indicator: {indicator}")
+                        return True
+                except Exception as e:
+                    if self.debug:
+                        print(f"Error checking indicator {indicator}: {e}")
+                    continue
+
+            # Debug: show current URL
+            current_url = self.main_page.url
+            if self.debug:
+                print(f"Current URL: {current_url}")
+                print("No course indicators found - treating as course selection page")
 
             return False
 
         except Exception as e:
-            if self.debug:
-                print(f"Error checking if in course: {e}")
+            print(f"Error in check_if_in_course: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     async def analyze_and_decide(self, context: str) -> Dict[str, Any]:
@@ -651,6 +669,8 @@ If no course list is visible, respond with:
                         success = await self.find_and_click_element(element_desc)
                         if success:
                             await self.wait_for_page_load()
+                            # Update main_page reference after navigation
+                            self.main_page = self.page
                             consecutive_waits = 0
                         else:
                             print("Click failed, will retry on next iteration")
