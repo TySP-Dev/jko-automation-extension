@@ -151,19 +151,32 @@ Analyze this screenshot and determine what action should be taken next.
 
 Context: {context}
 
-The course interface may have:
-- A "Start" button to begin the course
-- "Next Lesson" button at the top to move to next lesson
-- "Next Page" button to view more content in current lesson (must click through all pages before Next Lesson becomes available)
-- "Suspend Lesson" to bookmark progress
-- "Exit Course" to close
-- Multiple choice questions with radio buttons or clickable options
-- A submit button for tests
-- Content pages with text and images that need to be reviewed
+IMPORTANT: You must actively click buttons to progress. Do NOT use "read" action unless absolutely necessary.
+
+The interface may have:
+- Course selection page with "Launch" or "Resume" buttons - CLICK THESE to enter a course
+- A "Start" button to begin the course - CLICK THIS
+- "Next Lesson" button at the top to move to next lesson - CLICK THIS
+- "Next Page" button to view more content in current lesson - CLICK THIS (must click through all pages before Next Lesson becomes available)
+- "Continue" button to proceed - CLICK THIS
+- "Suspend Lesson" to bookmark progress - SKIP THIS
+- "Exit Course" to close - SKIP THIS unless course is complete
+- Multiple choice questions with radio buttons or clickable options - SELECT AND SUBMIT
+- A submit button for tests - CLICK THIS after selecting an answer
+- Content pages with text and images that need to be reviewed - click Next/Continue
+
+ACTION PRIORITY (in order):
+1. If you see "Launch" or "Resume" button - CLICK IT to enter the course
+2. If you see a "Start" button - CLICK IT to begin
+3. If you see "Next Page" or "Continue" button - CLICK IT to progress
+4. If you see "Next Lesson" button - CLICK IT to advance
+5. If you see a multiple choice question - ANSWER IT
+6. If you see a "Submit" button - CLICK IT
+7. Only use "read" if there are no visible buttons and content is still loading
 
 Respond ONLY with a JSON object (no markdown formatting, no code blocks) with this structure:
 {{
-    "action": "click|scroll|wait|read|answer_question|complete",
+    "action": "click|scroll|wait|answer_question|complete",
     "element": "description of what to click (if action is click)",
     "reasoning": "why you chose this action",
     "answer_index": 0 (only for answer_question action, 0-based index of the answer to select),
@@ -171,11 +184,12 @@ Respond ONLY with a JSON object (no markdown formatting, no code blocks) with th
 }}
 
 Examples:
+- If you see a "Launch" or "Resume" button: {{"action": "click", "element": "Launch button", "reasoning": "Need to launch the course"}}
 - If you see a "Start" button: {{"action": "click", "element": "Start button", "reasoning": "Need to start the course"}}
 - If you see a "Next Page" button: {{"action": "click", "element": "Next Page button", "reasoning": "Need to view all content"}}
+- If you see a "Continue" button: {{"action": "click", "element": "Continue button", "reasoning": "Need to continue"}}
 - If you see a "Next Lesson" button: {{"action": "click", "element": "Next Lesson button", "reasoning": "Completed current lesson"}}
 - If you see a multiple choice question: {{"action": "answer_question", "element": "Question with options", "reasoning": "Need to answer test question", "answer_index": 2, "is_test": true}}
-- If content is still loading: {{"action": "wait", "reasoning": "Page still loading"}}
 - If at course completion: {{"action": "complete", "reasoning": "Course finished"}}
 
 Respond with ONLY the JSON object, nothing else."""
@@ -210,7 +224,24 @@ Respond with ONLY the JSON object, nothing else."""
         desc_lower = description.lower()
 
         # Common button texts
-        if "start" in desc_lower:
+        if "launch" in desc_lower:
+            selectors.extend([
+                "button:has-text('Launch')",
+                "a:has-text('Launch')",
+                "input[value*='Launch']",
+                "[onclick*='launch']",
+                ".launch-button",
+                "#launch"
+            ])
+        elif "resume" in desc_lower:
+            selectors.extend([
+                "button:has-text('Resume')",
+                "a:has-text('Resume')",
+                "input[value*='Resume']",
+                "[onclick*='resume']",
+                ".resume-button"
+            ])
+        elif "start" in desc_lower:
             selectors.extend([
                 "button:has-text('Start')",
                 "a:has-text('Start')",
@@ -499,21 +530,51 @@ If no course list is visible, respond with:
                     consecutive_waits = 0
 
                 elif action == "read":
-                    # Just wait a bit for user to "read" content
-                    print("Reading content...")
-                    await asyncio.sleep(2)
-                    consecutive_waits = 0
+                    # "Read" is discouraged - try to find and click common buttons instead
+                    print("AI suggested 'read', but trying to find clickable buttons instead...")
+
+                    # Try common buttons in priority order
+                    buttons_to_try = ["Launch", "Resume", "Start", "Next Page", "Continue", "Next Lesson"]
+                    clicked = False
+
+                    for button_name in buttons_to_try:
+                        if await self.find_and_click_element(button_name):
+                            print(f"Found and clicked {button_name} button")
+                            await self.wait_for_page_load()
+                            clicked = True
+                            break
+
+                    if not clicked:
+                        print("No buttons found, waiting...")
+                        await asyncio.sleep(2)
+                        consecutive_waits += 1
+                    else:
+                        consecutive_waits = 0
 
                 else:  # wait
                     print("Waiting...")
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(2)
                     consecutive_waits += 1
 
                     if consecutive_waits >= max_consecutive_waits:
-                        print("Too many consecutive waits, trying to find Next button...")
-                        # Force try to click next
-                        await self.find_and_click_element("Next Page")
-                        consecutive_waits = 0
+                        print("Too many consecutive waits, aggressively trying to find buttons...")
+
+                        # Try all common buttons in priority order
+                        buttons_to_try = ["Launch", "Resume", "Start", "Next Page", "Continue", "Next Lesson"]
+                        clicked = False
+
+                        for button_name in buttons_to_try:
+                            if await self.find_and_click_element(button_name):
+                                print(f"Found and clicked {button_name} button")
+                                await self.wait_for_page_load()
+                                clicked = True
+                                consecutive_waits = 0
+                                break
+
+                        if not clicked:
+                            print("Still no buttons found, will keep trying...")
+                            consecutive_waits = 0  # Reset to avoid infinite loop
+
                         await asyncio.sleep(2)
 
                 # Small delay between iterations
