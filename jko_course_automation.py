@@ -102,6 +102,7 @@ class JKOCourseAutomation:
         self.debug = debug
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
+        self.main_page: Optional[Page] = None  # Keep reference to main page
         self.screenshot_dir = Path("screenshots")
         self.screenshot_dir.mkdir(exist_ok=True)
         self.screenshot_count = 0
@@ -141,6 +142,46 @@ class JKOCourseAutomation:
         except Exception as e:
             if self.debug:
                 print(f"Page load timeout (continuing anyway): {e}")
+
+    async def get_course_content_frame(self):
+        """Get the course content iframe if it exists"""
+        try:
+            # Check for course content iframe
+            content_iframe = await self.main_page.query_selector('iframe[name="text"], iframe#text, iframe.contentIframe')
+
+            if content_iframe:
+                frame = await content_iframe.content_frame()
+                return frame
+
+            return None
+
+        except Exception as e:
+            if self.debug:
+                print(f"Error getting course frame: {e}")
+            return None
+
+    async def check_if_in_course(self) -> bool:
+        """Check if we're currently inside a course (vs course selection page)"""
+        try:
+            # Look for course player indicators on the main page
+            indicators = [
+                '#playerCourseTitle',
+                '.content_topBar',
+                'iframe[name="text"]',
+                '.playerImageContainer'
+            ]
+
+            for indicator in indicators:
+                element = await self.main_page.query_selector(indicator)
+                if element:
+                    return True
+
+            return False
+
+        except Exception as e:
+            if self.debug:
+                print(f"Error checking if in course: {e}")
+            return False
 
     async def analyze_and_decide(self, context: str) -> Dict[str, Any]:
         """Analyze current screen and decide what action to take"""
@@ -219,6 +260,14 @@ Respond with ONLY the JSON object, nothing else."""
 
     async def find_and_click_element(self, description: str) -> bool:
         """Find and click an element based on AI description"""
+        # First try to find in main page, then in iframe if exists
+        pages_to_check = [self.main_page]
+
+        # Check if there's a course content iframe
+        course_frame = await self.get_course_content_frame()
+        if course_frame:
+            pages_to_check.append(course_frame)
+
         # Try various selectors based on description keywords
         selectors = []
         desc_lower = description.lower()
@@ -292,82 +341,88 @@ Respond with ONLY the JSON object, nothing else."""
         if search_keyword:
             print(f"Keyword: '{search_keyword}'")
 
-        # Try each selector
-        for selector in selectors:
-            try:
-                element = await self.page.query_selector(selector)
-                if element:
-                    # Check if element is visible
-                    is_visible = await element.is_visible()
-                    if is_visible:
-                        if self.debug:
-                            print(f"Found element with selector: {selector}")
-                        await element.click()
-                        print(f"✓ Clicked element with selector: {selector}")
-                        await asyncio.sleep(1)
-                        return True
-            except Exception as e:
-                if self.debug:
-                    print(f"Selector {selector} failed: {e}")
-                continue
+        # Try each page (main page and iframe if exists)
+        for page_idx, page in enumerate(pages_to_check):
+            if page_idx == 1:
+                print("Also searching in course content iframe...")
 
-        # If specific selectors didn't work, try finding ALL buttons and links
-        print(f"Specific selectors failed, searching all buttons/links...")
-        try:
-            all_elements = await self.page.query_selector_all("button, a, input[type='button'], input[type='submit'], [role='button']")
-            print(f"Found {len(all_elements)} total clickable elements")
-
-            visible_count = 0
-            for element in all_elements:
+            # Try each selector
+            for selector in selectors:
                 try:
-                    is_visible = await element.is_visible()
-                    if not is_visible:
-                        continue
-
-                    visible_count += 1
-                    text = (await element.text_content() or "").strip()
-                    value = await element.get_attribute("value") or ""
-                    aria_label = await element.get_attribute("aria-label") or ""
-                    title = await element.get_attribute("title") or ""
-
-                    combined_text = f"{text} {value} {aria_label} {title}".lower()
-
-                    if self.debug and search_keyword and search_keyword.lower() in combined_text:
-                        print(f"  Found potential match: text='{text}', value='{value}'")
-
-                    # Check if search keyword matches (case-insensitive)
-                    if search_keyword and search_keyword.lower() in combined_text:
-                        print(f"✓ Clicking element with text: '{text or value or aria_label}'")
-                        await element.click()
-                        await asyncio.sleep(1)
-                        return True
-
+                    element = await page.query_selector(selector)
+                    if element:
+                        # Check if element is visible
+                        is_visible = await element.is_visible()
+                        if is_visible:
+                            if self.debug:
+                                print(f"Found element with selector: {selector}")
+                            await element.click()
+                            print(f"✓ Clicked element with selector: {selector}")
+                            await asyncio.sleep(1)
+                            return True
                 except Exception as e:
                     if self.debug:
-                        print(f"Error checking element: {e}")
+                        print(f"Selector {selector} failed: {e}")
                     continue
 
-            print(f"Checked {visible_count} visible elements, none matched '{search_keyword}'")
+            # If specific selectors didn't work, try finding ALL buttons and links
+            if page_idx == 0:
+                print(f"Specific selectors failed, searching all buttons/links...")
+            try:
+                all_elements = await page.query_selector_all("button, a, input[type='button'], input[type='submit'], [role='button']")
+                print(f"Found {len(all_elements)} total clickable elements")
 
-            # List all visible button texts to help debug
-            if visible_count > 0:
-                print(f"\nVisible buttons on page:")
-                button_count = 0
+                visible_count = 0
                 for element in all_elements:
                     try:
-                        if await element.is_visible():
-                            text = (await element.text_content() or "").strip()
-                            if text:
-                                button_count += 1
-                                print(f"  {button_count}. '{text[:50]}...' " if len(text) > 50 else f"  {button_count}. '{text}'")
-                                if button_count >= 10:  # Limit output
-                                    print(f"  ... and {visible_count - 10} more")
-                                    break
-                    except:
+                        is_visible = await element.is_visible()
+                        if not is_visible:
+                            continue
+
+                        visible_count += 1
+                        text = (await element.text_content() or "").strip()
+                        value = await element.get_attribute("value") or ""
+                        aria_label = await element.get_attribute("aria-label") or ""
+                        title = await element.get_attribute("title") or ""
+
+                        combined_text = f"{text} {value} {aria_label} {title}".lower()
+
+                        if self.debug and search_keyword and search_keyword.lower() in combined_text:
+                            print(f"  Found potential match: text='{text}', value='{value}'")
+
+                        # Check if search keyword matches (case-insensitive)
+                        if search_keyword and search_keyword.lower() in combined_text:
+                            print(f"✓ Clicking element with text: '{text or value or aria_label}'")
+                            await element.click()
+                            await asyncio.sleep(1)
+                            return True
+
+                    except Exception as e:
+                        if self.debug:
+                            print(f"Error checking element: {e}")
                         continue
 
-        except Exception as e:
-            print(f"Error in general button search: {e}")
+                print(f"Checked {visible_count} visible elements, none matched '{search_keyword}'")
+
+                # List all visible button texts to help debug
+                if visible_count > 0:
+                    print(f"\nVisible buttons on page:")
+                    button_count = 0
+                    for element in all_elements:
+                        try:
+                            if await element.is_visible():
+                                text = (await element.text_content() or "").strip()
+                                if text:
+                                    button_count += 1
+                                    print(f"  {button_count}. '{text[:50]}...' " if len(text) > 50 else f"  {button_count}. '{text}'")
+                                    if button_count >= 10:  # Limit output
+                                        print(f"  ... and {visible_count - 10} more")
+                                        break
+                        except:
+                            continue
+
+            except Exception as e:
+                print(f"Error in general button search: {e}")
 
         print(f"✗ Could not find element: {description}")
         return False
@@ -512,6 +567,9 @@ If no course list is visible, respond with:
             await self.page.goto(start_url)
             await self.wait_for_page_load()
 
+            # Set main page reference
+            self.main_page = self.page
+
             # Wait for user to log in and navigate to course
             if not auto_login:
                 await self.wait_for_user_login()
@@ -522,13 +580,27 @@ If no course list is visible, respond with:
 
             print("\n🤖 AI is now in control...\n")
 
+            in_course = False
+
             while iteration < max_iterations:
                 iteration += 1
                 print(f"\n--- Iteration {iteration} ---")
 
+                # Check if we're in a course
+                in_course = await self.check_if_in_course()
+
+                if in_course:
+                    course_frame = await self.get_course_content_frame()
+                    if course_frame:
+                        print("🎓 Inside course (will search both main page and iframe)")
+                    else:
+                        print("🎓 Inside course page")
+                else:
+                    print("📋 On course selection page")
+
                 # Analyze current screen
                 decision = await self.analyze_and_decide(
-                    f"Iteration {iteration}, navigating through course content"
+                    f"Iteration {iteration}, {'in course content' if in_course else 'on course selection page'}"
                 )
 
                 print(f"Action: {decision.get('action')}")
@@ -542,13 +614,19 @@ If no course list is visible, respond with:
 
                 elif action == "click":
                     element_desc = decision.get("element", "")
-                    success = await self.find_and_click_element(element_desc)
-                    if success:
-                        await self.wait_for_page_load()
-                        consecutive_waits = 0
+
+                    # Avoid clicking Resume/Launch buttons if we're already in a course
+                    if in_course and ("resume" in element_desc.lower() or "launch" in element_desc.lower()):
+                        print(f"⚠ Skipping '{element_desc}' - we're already inside a course")
+                        consecutive_waits += 1
                     else:
-                        print("Click failed, will retry on next iteration")
-                        await asyncio.sleep(2)
+                        success = await self.find_and_click_element(element_desc)
+                        if success:
+                            await self.wait_for_page_load()
+                            consecutive_waits = 0
+                        else:
+                            print("Click failed, will retry on next iteration")
+                            await asyncio.sleep(2)
 
                 elif action == "answer_question":
                     answer_index = decision.get("answer_index", 0)
@@ -579,14 +657,24 @@ If no course list is visible, respond with:
                     print("AI suggested 'read', but trying to find clickable buttons instead...")
 
                     # Try common buttons in priority order
-                    buttons_to_try = [
-                        "Launch button",
-                        "Resume button",
-                        "Start button",
-                        "Next Page button",
-                        "Continue button",
-                        "Next Lesson button"
-                    ]
+                    # Skip Resume/Launch if we're already in a course
+                    if in_course:
+                        buttons_to_try = [
+                            "Start button",
+                            "Next Page button",
+                            "Continue button",
+                            "Next Lesson button"
+                        ]
+                    else:
+                        buttons_to_try = [
+                            "Launch button",
+                            "Resume button",
+                            "Start button",
+                            "Next Page button",
+                            "Continue button",
+                            "Next Lesson button"
+                        ]
+
                     clicked = False
 
                     for button_desc in buttons_to_try:
@@ -616,14 +704,25 @@ If no course list is visible, respond with:
                         print("="*60)
 
                         # Try all common buttons in priority order
-                        buttons_to_try = [
-                            "Launch button",
-                            "Resume button",
-                            "Start button",
-                            "Next Page button",
-                            "Continue button",
-                            "Next Lesson button"
-                        ]
+                        # Skip Resume/Launch if we're already in a course
+                        if in_course:
+                            print("Already in course - skipping Resume/Launch buttons")
+                            buttons_to_try = [
+                                "Start button",
+                                "Next Page button",
+                                "Continue button",
+                                "Next Lesson button"
+                            ]
+                        else:
+                            buttons_to_try = [
+                                "Launch button",
+                                "Resume button",
+                                "Start button",
+                                "Next Page button",
+                                "Continue button",
+                                "Next Lesson button"
+                            ]
+
                         clicked = False
 
                         for button_desc in buttons_to_try:
