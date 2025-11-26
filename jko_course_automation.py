@@ -126,7 +126,35 @@ class JKOCourseAutomation:
         self.screenshot_count += 1
         screenshot_path = self.screenshot_dir / f"{self.screenshot_count:04d}_{name}.png"
 
-        screenshot_bytes = await self.page.screenshot(path=str(screenshot_path), full_page=False)
+        # Check if we should screenshot the iframe content instead of main page
+        screenshot_target = self.page
+
+        # If we're in a course, try to screenshot the iframe content
+        if self.main_page:
+            try:
+                # Check if we're in a course
+                in_course = await self.check_if_in_course()
+
+                if in_course:
+                    # Try to get course content frame
+                    course_frame = await self.get_course_content_frame()
+
+                    if course_frame:
+                        screenshot_target = course_frame
+                        print(f"📸 Taking screenshot of course content (inside iframe)")
+                    else:
+                        # If no iframe, use main page
+                        screenshot_target = self.main_page
+                        print(f"📸 Taking screenshot of course page (main)")
+                else:
+                    # Not in course, use main page
+                    screenshot_target = self.main_page
+                    print(f"📸 Taking screenshot of main page")
+            except:
+                # On error, fall back to self.page
+                pass
+
+        screenshot_bytes = await screenshot_target.screenshot(path=str(screenshot_path), full_page=False)
         screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
 
         if self.debug:
