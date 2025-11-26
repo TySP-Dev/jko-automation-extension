@@ -223,17 +223,22 @@ Respond with ONLY the JSON object, nothing else."""
         selectors = []
         desc_lower = description.lower()
 
-        # Common button texts
+        # Determine search keyword
+        search_keyword = None
         if "launch" in desc_lower:
+            search_keyword = "launch"
             selectors.extend([
                 "button:has-text('Launch')",
                 "a:has-text('Launch')",
                 "input[value*='Launch']",
                 "[onclick*='launch']",
                 ".launch-button",
-                "#launch"
+                "#launch",
+                "button:text-is('Launch')",
+                "a:text-is('Launch')"
             ])
         elif "resume" in desc_lower:
+            search_keyword = "resume"
             selectors.extend([
                 "button:has-text('Resume')",
                 "a:has-text('Resume')",
@@ -242,6 +247,7 @@ Respond with ONLY the JSON object, nothing else."""
                 ".resume-button"
             ])
         elif "start" in desc_lower:
+            search_keyword = "start"
             selectors.extend([
                 "button:has-text('Start')",
                 "a:has-text('Start')",
@@ -249,6 +255,7 @@ Respond with ONLY the JSON object, nothing else."""
                 "[onclick*='start']"
             ])
         elif "next page" in desc_lower:
+            search_keyword = "next"
             selectors.extend([
                 "button:has-text('Next Page')",
                 "a:has-text('Next Page')",
@@ -257,6 +264,7 @@ Respond with ONLY the JSON object, nothing else."""
                 "#nextPage"
             ])
         elif "next lesson" in desc_lower:
+            search_keyword = "next lesson"
             selectors.extend([
                 "button:has-text('Next Lesson')",
                 "a:has-text('Next Lesson')",
@@ -265,6 +273,7 @@ Respond with ONLY the JSON object, nothing else."""
                 "#nextLesson"
             ])
         elif "submit" in desc_lower:
+            search_keyword = "submit"
             selectors.extend([
                 "button:has-text('Submit')",
                 "input[type='submit']",
@@ -272,11 +281,16 @@ Respond with ONLY the JSON object, nothing else."""
                 "a:has-text('Submit')"
             ])
         elif "continue" in desc_lower:
+            search_keyword = "continue"
             selectors.extend([
                 "button:has-text('Continue')",
                 "a:has-text('Continue')",
                 "input[value*='Continue']"
             ])
+
+        print(f"Searching for element: {description}")
+        if search_keyword:
+            print(f"Keyword: '{search_keyword}'")
 
         # Try each selector
         for selector in selectors:
@@ -286,9 +300,10 @@ Respond with ONLY the JSON object, nothing else."""
                     # Check if element is visible
                     is_visible = await element.is_visible()
                     if is_visible:
-                        await element.click()
                         if self.debug:
-                            print(f"Clicked element with selector: {selector}")
+                            print(f"Found element with selector: {selector}")
+                        await element.click()
+                        print(f"✓ Clicked element with selector: {selector}")
                         await asyncio.sleep(1)
                         return True
             except Exception as e:
@@ -296,35 +311,65 @@ Respond with ONLY the JSON object, nothing else."""
                     print(f"Selector {selector} failed: {e}")
                 continue
 
-        # If specific selectors didn't work, try a more general approach
-        # Look for visible buttons with text matching the description
+        # If specific selectors didn't work, try finding ALL buttons and links
+        print(f"Specific selectors failed, searching all buttons/links...")
         try:
-            all_buttons = await self.page.query_selector_all("button, a, input[type='button'], input[type='submit']")
-            for button in all_buttons:
+            all_elements = await self.page.query_selector_all("button, a, input[type='button'], input[type='submit'], [role='button']")
+            print(f"Found {len(all_elements)} total clickable elements")
+
+            visible_count = 0
+            for element in all_elements:
                 try:
-                    is_visible = await button.is_visible()
+                    is_visible = await element.is_visible()
                     if not is_visible:
                         continue
 
-                    text = await button.text_content() or ""
-                    value = await button.get_attribute("value") or ""
-                    combined_text = (text + " " + value).lower()
+                    visible_count += 1
+                    text = (await element.text_content() or "").strip()
+                    value = await element.get_attribute("value") or ""
+                    aria_label = await element.get_attribute("aria-label") or ""
+                    title = await element.get_attribute("title") or ""
 
-                    # Check if any keyword from description matches
-                    keywords = desc_lower.split()
-                    if any(keyword in combined_text for keyword in keywords if len(keyword) > 3):
-                        await button.click()
-                        if self.debug:
-                            print(f"Clicked button with text: {text or value}")
+                    combined_text = f"{text} {value} {aria_label} {title}".lower()
+
+                    if self.debug and search_keyword and search_keyword.lower() in combined_text:
+                        print(f"  Found potential match: text='{text}', value='{value}'")
+
+                    # Check if search keyword matches (case-insensitive)
+                    if search_keyword and search_keyword.lower() in combined_text:
+                        print(f"✓ Clicking element with text: '{text or value or aria_label}'")
+                        await element.click()
                         await asyncio.sleep(1)
                         return True
-                except:
-                    continue
-        except Exception as e:
-            if self.debug:
-                print(f"General button search failed: {e}")
 
-        print(f"Could not find element: {description}")
+                except Exception as e:
+                    if self.debug:
+                        print(f"Error checking element: {e}")
+                    continue
+
+            print(f"Checked {visible_count} visible elements, none matched '{search_keyword}'")
+
+            # List all visible button texts to help debug
+            if visible_count > 0:
+                print(f"\nVisible buttons on page:")
+                button_count = 0
+                for element in all_elements:
+                    try:
+                        if await element.is_visible():
+                            text = (await element.text_content() or "").strip()
+                            if text:
+                                button_count += 1
+                                print(f"  {button_count}. '{text[:50]}...' " if len(text) > 50 else f"  {button_count}. '{text}'")
+                                if button_count >= 10:  # Limit output
+                                    print(f"  ... and {visible_count - 10} more")
+                                    break
+                    except:
+                        continue
+
+        except Exception as e:
+            print(f"Error in general button search: {e}")
+
+        print(f"✗ Could not find element: {description}")
         return False
 
     async def answer_multiple_choice(self, answer_index: int) -> bool:
@@ -534,15 +579,23 @@ If no course list is visible, respond with:
                     print("AI suggested 'read', but trying to find clickable buttons instead...")
 
                     # Try common buttons in priority order
-                    buttons_to_try = ["Launch", "Resume", "Start", "Next Page", "Continue", "Next Lesson"]
+                    buttons_to_try = [
+                        "Launch button",
+                        "Resume button",
+                        "Start button",
+                        "Next Page button",
+                        "Continue button",
+                        "Next Lesson button"
+                    ]
                     clicked = False
 
-                    for button_name in buttons_to_try:
-                        if await self.find_and_click_element(button_name):
-                            print(f"Found and clicked {button_name} button")
+                    for button_desc in buttons_to_try:
+                        print(f"\nTrying to find: {button_desc}")
+                        if await self.find_and_click_element(button_desc):
                             await self.wait_for_page_load()
                             clicked = True
                             break
+                        print()  # Add spacing between attempts
 
                     if not clicked:
                         print("No buttons found, waiting...")
@@ -557,22 +610,35 @@ If no course list is visible, respond with:
                     consecutive_waits += 1
 
                     if consecutive_waits >= max_consecutive_waits:
-                        print("Too many consecutive waits, aggressively trying to find buttons...")
+                        print("\n" + "="*60)
+                        print("Too many consecutive waits!")
+                        print("Aggressively trying to find buttons...")
+                        print("="*60)
 
                         # Try all common buttons in priority order
-                        buttons_to_try = ["Launch", "Resume", "Start", "Next Page", "Continue", "Next Lesson"]
+                        buttons_to_try = [
+                            "Launch button",
+                            "Resume button",
+                            "Start button",
+                            "Next Page button",
+                            "Continue button",
+                            "Next Lesson button"
+                        ]
                         clicked = False
 
-                        for button_name in buttons_to_try:
-                            if await self.find_and_click_element(button_name):
-                                print(f"Found and clicked {button_name} button")
+                        for button_desc in buttons_to_try:
+                            print(f"\nAttempt: {button_desc}")
+                            if await self.find_and_click_element(button_desc):
                                 await self.wait_for_page_load()
                                 clicked = True
                                 consecutive_waits = 0
                                 break
+                            print()  # Add spacing
 
                         if not clicked:
+                            print("\n" + "="*60)
                             print("Still no buttons found, will keep trying...")
+                            print("="*60)
                             consecutive_waits = 0  # Reset to avoid infinite loop
 
                         await asyncio.sleep(2)
